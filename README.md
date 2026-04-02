@@ -10,8 +10,8 @@ RAGAP-PHI is a cleaned, GitHub-ready packaging of the RAGAP phage-host predictio
 - Vendored helper scripts under `scripts/`
 - Main config under `configs/pipeline.fullhost_v2.yaml`
 - Conda environment files under `envs/`
-- Small taxonomy and metadata files under `data/`
-- Small tabular inputs under `inputs/`
+- Small inference metadata files under `data/`
+- Placeholder input directories under `inputs/`
 
 ## Release Model
 
@@ -129,10 +129,20 @@ These assets are intentionally kept out of normal Git history:
 - optional: `artifacts/ragap_phi/manifests/train.json`
 - `inputs/phage_fasta/`
 - `inputs/host_fasta/`
+- `inputs/virus_host_with_GCF.tsv`
+- `inputs/edges/*.tsv`
+- `data/taxonomy/taxonomy_poincare_tangent.parquet`
 
 ## Training
 
 Training support is still present, but it is not the primary publication path for this repository.
+
+The public inference-oriented repository does not ship several training-only inputs. If you want to rerun training, you must provide them locally, including:
+
+- `inputs/virus_host_with_GCF.tsv`
+- `inputs/edges/*.tsv`
+- `data/taxonomy/taxonomy_poincare_tangent.parquet`
+- the FASTA corpora under `inputs/phage_fasta/` and `inputs/host_fasta/`
 
 Default config:
 

@@ -1,6 +1,8 @@
 # Inputs
 
-This directory keeps the small tabular inputs needed by the pipeline:
+This public inference-oriented repository keeps only placeholder input directories.
+
+The following training-only inputs are intentionally not bundled in Git:
 
 - `virus_host_with_GCF.tsv`
 - `edges/*.tsv`

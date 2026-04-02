@@ -15,6 +15,9 @@ inputs/phage_fasta/*
 !inputs/phage_fasta/.gitkeep
 inputs/host_fasta/*
 !inputs/host_fasta/.gitkeep
+inputs/edges/*
+!inputs/edges/.gitkeep
+inputs/virus_host_with_GCF.tsv
 
 assets/models/DNA_bert_4/*
 !assets/models/DNA_bert_4/.gitkeep
@@ -22,6 +25,8 @@ assets/databases/pharokka_v1.4.0_databases/*
 !assets/databases/pharokka_v1.4.0_databases/.gitkeep
 assets/checkpoints/*
 !assets/checkpoints/README.md
+
+data/taxonomy/taxonomy_poincare_tangent.parquet
 
 *.pt
 *.pkl

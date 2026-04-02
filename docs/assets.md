@@ -25,10 +25,13 @@ These are the release assets the maintainer should publish separately:
 
 ## Bundled Small Files
 
-- `inputs/virus_host_with_GCF.tsv`
-- `inputs/edges/*.tsv`
 - `data/metadata/taxid_species.tsv`
 - `data/taxonomy/taxonomy_with_alias.parquet`
+
+## Training-Only Files Not Bundled In Git
+
+- `inputs/virus_host_with_GCF.tsv`
+- `inputs/edges/*.tsv`
 - `data/taxonomy/taxonomy_poincare_tangent.parquet`
 
 ## Official External Sources
