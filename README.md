@@ -55,7 +55,7 @@ These large external assets are not committed to Git:
 - `assets/databases/pharokka_v1.4.0_databases/`
 - ESM2 weights, usually downloaded to the local cache on first use
 
-Official sources and setup notes are listed in [docs/assets.md](/home/wangjingyuan/wys/RAGAP-PHI/docs/assets.md) and [docs/inference.md](/home/wangjingyuan/wys/RAGAP-PHI/docs/inference.md).
+Official sources and setup notes are listed in [docs/assets.md](docs/assets.md) and [docs/inference.md](docs/inference.md).
 
 ## Quick Start
 
@@ -160,8 +160,8 @@ python pipeline.py run \
 
 ## Documentation
 
-- [docs/inference.md](/home/wangjingyuan/wys/RAGAP-PHI/docs/inference.md): exact inference reproduction and asset checklist
-- [docs/assets.md](/home/wangjingyuan/wys/RAGAP-PHI/docs/assets.md): external assets and recommended distribution strategy
+- [docs/inference.md](docs/inference.md): exact inference reproduction and asset checklist
+- [docs/assets.md](docs/assets.md): external assets and recommended distribution strategy
 
 ## Notes For GitHub Publication
 

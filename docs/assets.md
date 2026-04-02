@@ -50,4 +50,4 @@ These are the release assets the maintainer should publish separately:
 - Keep code and small metadata in Git.
 - Publish the minimal inference bundle as a GitHub Release asset, Zenodo archive, or similar external download.
 - Do not publish only the checkpoint unless you also change the inference code path.
-- Use [package_inference_bundle.py](/home/wangjingyuan/wys/RAGAP-PHI/scripts/package_inference_bundle.py) to export the minimal bundle from an older artifact directory.
+- Use [package_inference_bundle.py](../scripts/package_inference_bundle.py) to export the minimal bundle from an older artifact directory.
