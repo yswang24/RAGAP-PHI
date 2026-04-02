@@ -1,0 +1,282 @@
+dataset_id: ragap_phi
+artifact_root: "{project_root}/artifacts/{dataset_id}"
+python_bin: python
+
+execution:
+  conda_bin: conda
+  base_env: PHPGAT
+  base_python: python
+  stage_envs:
+    dna_embed_phage: dnaberts
+    dna_embed_host: dnaberts
+    build_catalogs: PHPGAT
+    build_pairs: PHPGAT
+    prepare_phage_proteins: pharokka_env
+    prepare_host_proteins: pharokka_env
+    embed_phage_proteins: esm_env
+    embed_host_proteins: esm_env
+    build_cluster_assets: PHPGAT
+    build_graph: PHPGAT
+    train: PHPGAT
+
+inputs:
+  phage_fasta_dir: "{project_root}/inputs/phage_fasta"
+  host_fasta_dir: "{project_root}/inputs/host_fasta"
+  raw_pairs_tsv: "{project_root}/inputs/virus_host_with_GCF.tsv"
+  taxonomy_alias_parquet: "{project_root}/data/taxonomy/taxonomy_with_alias.parquet"
+  taxonomy_graph_parquet: "{project_root}/data/taxonomy/taxonomy_poincare_tangent.parquet"
+  taxid2species_tsv: "{project_root}/data/metadata/taxid_species.tsv"
+
+tools:
+  dna_embed_script: "{project_root}/scripts/dna_bert_embed.py"
+  build_pairs_script: "{project_root}/scripts/build_pairs_and_splits.py"
+  phage_esm_script: "{project_root}/scripts/generate_esm_embeddings_phage.py"
+  host_esm_script: "{project_root}/scripts/generate_esm_embeddings.py"
+  graph_script: "{project_root}/scripts/build_hetero_graph_with_splits.py"
+  train_script: "{project_root}/scripts/train_hgt_phage_host_weight_RBP_noleak_hard.py"
+
+slurm:
+  defaults:
+    partition: gpujl
+    time: "24:00:00"
+    ntasks: 1
+    cpus_per_task: 32
+    mem: 64G
+    gres: gpu:0
+  per_stage:
+    embed_phage_proteins:
+      cpus_per_task: 32
+      mem: 64G
+      gres: gpu:1
+    embed_host_proteins:
+      cpus_per_task: 32
+      mem: 96G
+      gres: gpu:1
+    build_graph:
+      cpus_per_task: 32
+      mem: 96G
+    train:
+      time: "100:00:00"
+      cpus_per_task: 32
+      mem: 180G
+      gres: gpu:1
+
+dna_embedding:
+  phage:
+    mode: script
+    script: "{dna_embed_script}"
+    python: python
+    fasta_dir: "{phage_fasta_dir}"
+    out_dir: "{dna_dir}/phage_embeddings"
+    model: "{project_root}/assets/models/DNA_bert_4"
+    k: 4
+    window_tokens: 510
+    stride_tokens: 510
+    batch_size: 8
+    device: cuda
+    precision: fp16
+    rc: false
+    max_windows: 800
+    seed: 13
+    log_path: "{dna_dir}/phage_dna_embed.log"
+  host:
+    mode: script
+    script: "{dna_embed_script}"
+    python: python
+    fasta_dir: "{host_fasta_dir}"
+    out_dir: "{dna_dir}/host_embeddings"
+    model: "{project_root}/assets/models/DNA_bert_4"
+    k: 4
+    window_tokens: 510
+    stride_tokens: 510
+    batch_size: 8
+    device: cuda
+    precision: fp16
+    rc: false
+    max_windows: 800
+    seed: 13
+    log_path: "{dna_dir}/host_dna_embed.log"
+
+build_catalogs:
+  mode: internal
+  phage_dir: "{dna_dir}/phage_embeddings"
+  host_dir: "{dna_dir}/host_embeddings"
+  taxonomy_parquet: "{taxonomy_graph_parquet}"
+  host_metadata_tsv: "{raw_pairs_tsv}"
+  out_dir: "{catalog_dir}"
+  phage_catalog: "{catalog_dir}/phage_catalog.parquet"
+  host_catalog: "{catalog_dir}/host_catalog.parquet"
+  validate:
+    parquet_columns:
+      - path: "{catalog_dir}/phage_catalog.parquet"
+        columns: [phage_id, phage_dna_emb]
+      - path: "{catalog_dir}/host_catalog.parquet"
+        columns: [host_gcf, sequence_id, host_species_taxid, host_dna_emb]
+
+pairs:
+  mode: script
+  script: "{build_pairs_script}"
+  python: python
+  raw_pairs: "{raw_pairs_tsv}"
+  host_catalog: "{catalog_dir}/host_catalog.parquet"
+  taxonomy_parquet: "{taxonomy_alias_parquet}"
+  out_dir: "{pairs_dir}"
+  split: random
+  ratios: [0.8, 0.1, 0.1]
+  seed: 13
+  validate:
+    tsv_columns:
+      - path: "{pairs_dir}/pairs_all.tsv"
+        columns: [phage_id, host_gcf, label]
+
+phage_protein_prep:
+  mode: internal
+  backend: phanotate_direct
+  fasta_dir: "{phage_fasta_dir}"
+  faa_dir: "{protein_dir}/phage_faa"
+  annotation_dir: "{protein_dir}/phage_annotation"
+  keep_annotation: false
+  phanotate_bin: phanotate.py
+  pharokka_bin: pharokka.py
+  database: "{project_root}/assets/databases/pharokka_v1.4.0_databases"
+  gene_predictor: phanotate
+  threads: 32
+  workers: 32
+  extra_args: []
+
+host_protein_prep:
+  mode: internal
+  backend: prodigal
+  fasta_dir: "{host_fasta_dir}"
+  faa_dir: "{protein_dir}/host_faa"
+  prodigal_bin: prodigal
+  meta: false
+
+phage_protein_embedding:
+  mode: script
+  script: "{phage_esm_script}"
+  python: python
+  faa_dir: "{protein_dir}/phage_faa"
+  out_dir: "{protein_dir}/phage_protein_embeddings"
+  failure_report: "{protein_dir}/phage_protein_embedding_failures.json"
+  model_name: esm2_t33_650M_UR50D
+  repr_l: 32
+  batch_size: 4
+  workers: 4
+  device: cuda
+
+host_protein_embedding:
+  mode: script
+  script: "{host_esm_script}"
+  python: python
+  faa_dir: "{protein_dir}/host_faa"
+  out_dir: "{protein_dir}/host_protein_embeddings"
+  failure_report: "{protein_dir}/host_protein_embedding_failures.json"
+  model_name: esm2_t33_650M_UR50D
+  repr_l: 32
+  batch_size: 4
+  workers: 1
+  device: cuda
+
+cluster_assets:
+  mode: internal
+  phage_embedding_dir: "{protein_dir}/phage_protein_embeddings"
+  host_embedding_dir: "{protein_dir}/host_protein_embeddings"
+  cluster_member_tables: []
+  sourmash_work_dir: "{cluster_dir}/sourmash"
+  similarity_edges:
+    enabled: true
+    sourmash_env: sourmash_env
+    sourmash_bin: sourmash
+    scaled: 1000
+    phage:
+      kmer_size: 21
+      threshold: 0.8
+    host:
+      kmer_size: 31
+      threshold: 0.8
+  protein_catalog_out: "{cluster_dir}/protein_catalog.parquet"
+  phage_protein_edges_out: "{cluster_dir}/phage_protein_edges.parquet"
+  host_protein_edges_out: "{cluster_dir}/host_protein_edges.parquet"
+  cluster_protein_catalog_out: "{cluster_dir}/cluster_protein_catalog.parquet"
+  edge_dir: "{cluster_dir}/edge_dir"
+  edge_sources:
+    phage_host_edges: "{project_root}/inputs/edges/phage_host_edges.tsv"
+    phage_phage_edges: "{project_root}/inputs/edges/phage_phage_edges.tsv"
+    host_host_edges: "{project_root}/inputs/edges/host_host_edges.tsv"
+    protein_protein_edges: "{project_root}/inputs/edges/protein_protein_edges.tsv"
+    host_taxonomy_edges: "{project_root}/inputs/edges/host_taxonomy_edges.tsv"
+    phage_taxonomy_edges: "{project_root}/inputs/edges/phage_taxonomy_edges.tsv"
+    taxonomy_taxonomy_edges: "{project_root}/inputs/edges/taxonomy_taxonomy_edges.tsv"
+  validate:
+    dir_contains:
+      - path: "{cluster_dir}/edge_dir"
+        names:
+          - phage_phage_edges.tsv
+          - host_host_edges.tsv
+          - phage_host_edges.tsv
+          - phage_protein_edges.tsv
+          - host_protein_edges.tsv
+          - protein_protein_edges.tsv
+          - host_taxonomy_edges.tsv
+          - phage_taxonomy_edges.tsv
+          - taxonomy_taxonomy_edges.tsv
+
+graph:
+  mode: script
+  script: "{graph_script}"
+  python: python
+  phage_catalog: "{catalog_dir}/phage_catalog.parquet"
+  host_catalog: "{catalog_dir}/host_catalog.parquet"
+  protein_clusters: "{cluster_dir}/cluster_protein_catalog.parquet"
+  taxonomy: "{taxonomy_graph_parquet}"
+  edge_dir: "{cluster_dir}/edge_dir"
+  pairs_train: "{pairs_dir}/pairs_train.tsv"
+  pairs_val: "{pairs_dir}/pairs_val.tsv"
+  pairs_test: "{pairs_dir}/pairs_test.tsv"
+  out: "{graph_dir}/hetero_graph.pt"
+  map_out: "{graph_dir}/node_maps.json"
+  validate:
+    nonempty_files:
+      - "{graph_dir}/hetero_graph.pt"
+      - "{graph_dir}/node_maps.json"
+
+train:
+  mode: script
+  script: "{train_script}"
+  python: python
+  data_pt: "{graph_dir}/hetero_graph.pt"
+  node_maps: "{graph_dir}/node_maps.json"
+  taxid2species_tsv: "{taxid2species_tsv}"
+  out_dir: "{artifact_root}/train/fullhost_v2"
+  device: cuda
+  eval_device: cpu
+  seed: 13
+  hidden_dim: 256
+  out_dim: 256
+  n_layers: 2
+  n_heads: 4
+  dropout: 0.15
+  lr: 0.0005
+  epochs: 5000
+  num_neighbors: [20, 10]
+  batch_size: 512
+  neg_ratio: 128
+  hard_negatives: 128
+  tau: 0.1
+  eval_neg_ratio: -1
+  patience: 4
+  loader_workers: 8
+  pin_memory: true
+  train_log_every: 100
+  eval_every: 500
+  save_eval_predictions: false
+  save_final_predictions: true
+  host_cache_refresh_every: 50
+  relation_aggr: attention
+  train_objective: fullhost
+  message_passing_relation_scope: fullgraph
+  enable_tf32: true
+  deterministic: false
+  cudnn_benchmark: true
+  save_path: best_GAT_attn_fullhost_copymsg_v2.pt
