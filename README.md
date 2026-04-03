@@ -24,6 +24,25 @@ For this project, a checkpoint alone is not enough. The inference code attaches 
 
 ## Minimal Inference Bundle
 
+### Download from GitHub Release
+
+Due to GitHub's 2GB file limit, the inference bundle is split into multiple parts. Download all `bundle_part_*` files from the Release page and merge them:
+
+```bash
+# Merge split files
+cat bundle_part_* > ragap_phi_inference_bundle.tar.gz
+
+# Extract
+tar -xzf ragap_phi_inference_bundle.tar.gz
+```
+
+Place the extracted `ragap_phi/` directory under `artifacts/`:
+```bash
+mv ragap_phi artifacts/
+```
+
+### Bundle Contents
+
 After extraction, the bundle should provide these paths under `artifacts/ragap_phi/`:
 
 - `graph/hetero_graph.pt`
