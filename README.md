@@ -12,58 +12,16 @@ RAGAP-PHI is a phage-host interaction prediction system using a heterogeneous gr
 - Conda environment files under `envs/`
 - Small inference metadata files under `data/`
 
-## Release Model
-
-This repository is published together with a separate inference bundle:
-
-1. GitHub repository: code, configs, small metadata.
-2. Inference bundle archive: the minimal cached artifacts needed by inference.
-
-A checkpoint alone is not enough. The inference code attaches a new phage into a frozen training graph and computes phage-phage similarity against a cached training signature library.
-
 ## Minimal Inference Bundle
 
-### Download from GitHub Release
-
-Due to GitHub's 2GB file limit, the inference bundle is split into multiple parts. Download all `bundle_part_*` files from the Release page and merge them:
+The inference bundle is available on the GitHub Release page. `setup.sh` downloads it automatically. To download manually:
 
 ```bash
-# Merge split files
+# Download all bundle_part_* from the Release page, then:
 cat bundle_part_* > ragap_phi_inference_bundle.tar.gz
-
-# Extract
 tar -xzf ragap_phi_inference_bundle.tar.gz
-```
-
-Place the extracted `ragap_phi/` directory under `artifacts/`:
-```bash
 mv ragap_phi artifacts/
 ```
-
-### Bundle Contents
-
-After extraction, the bundle should provide these paths under `artifacts/ragap_phi/`:
-
-- `graph/hetero_graph.pt`
-- `graph/node_maps.json`
-- `catalogs/host_catalog.parquet`
-- `cluster/sourmash/phage_phage/signatures/`
-- `train/fullhost_v2/best_GAT_attn_fullhost_copymsg_v2.pt`
-
-Optional:
-
-- `manifests/train.json`
-
-If you are the maintainer and already have an older RAGAP artifact directory, create this bundle with:
-
-```bash
-python scripts/package_inference_bundle.py \
-  --source-artifacts <OLD_RAGAP_ARTIFACT_ROOT> \
-  --output-root /tmp/ragap_phi_release \
-  --archive /tmp/ragap_phi_inference_bundle.tar.gz
-```
-
-Add `--include-manifest` only if you also want to retain `manifests/train.json` as metadata.
 
 ## Quick Start
 
