@@ -1,9 +1,9 @@
 # Models
 
-Place large local model assets here.
+Model weights are downloaded automatically by `setup.sh` or `scripts/setup_models.py`.
 
-Expected layout:
+Expected layout after setup:
 
-- `assets/models/DNA_bert_4/`
+- `assets/models/DNA_bert_4/` — DNABERT-4 weights (~330MB)
 
-The directory is tracked only as an empty placeholder because the model files are too large for normal Git history.
+ESM2 650M weights are cached separately at `~/.cache/torch/hub/checkpoints/` by the `fair-esm` library.

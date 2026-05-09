@@ -8,7 +8,7 @@ from typing import Any
 
 
 DEFAULT_CONDA_BIN = os.environ.get("RAGAP_CONDA_BIN") or os.environ.get("CONDA_EXE") or "conda"
-DEFAULT_BASE_ENV = os.environ.get("RAGAP_BASE_ENV", "PHPGAT")
+DEFAULT_BASE_ENV = os.environ.get("RAGAP_BASE_ENV", "RAGAP")
 DEFAULT_BASE_PYTHON = os.environ.get("RAGAP_BOOTSTRAP_PYTHON", sys.executable)
 
 
@@ -26,17 +26,9 @@ def _default_envs_root() -> str:
 
 DEFAULT_ENVS_ROOT = _default_envs_root()
 DEFAULT_STAGE_ENVS = {
-    "dna_embed_phage": "dnaberts",
-    "dna_embed_host": "dnaberts",
-    "build_catalogs": "PHPGAT",
-    "build_pairs": "PHPGAT",
-    "prepare_phage_proteins": "pharokka_env",
-    "prepare_host_proteins": "pharokka_env",
+    "dna_embed_phage": "RAGAP",
+    "prepare_phage_proteins": "RAGAP",
     "embed_phage_proteins": "esm_env",
-    "embed_host_proteins": "esm_env",
-    "build_cluster_assets": "PHPGAT",
-    "build_graph": "PHPGAT",
-    "train": "PHPGAT",
 }
 
 
@@ -61,10 +53,6 @@ def envs_root(config: dict[str, Any]) -> str:
 
 
 def _heuristic_stage_env(stage_name: str) -> str:
-    if stage_name.startswith("dna_embed_"):
-        return "dnaberts"
-    if stage_name.startswith("prepare_"):
-        return "pharokka_env"
     if stage_name.startswith("embed_") and "proteins" in stage_name:
         return "esm_env"
     return DEFAULT_BASE_ENV
@@ -94,11 +82,27 @@ def stage_runtime(config: dict[str, Any], stage_name: str, stage_cfg: dict[str, 
     }
 
 
+def resolve_env_binary(config: dict[str, Any], stage_name: str, binary: str, stage_cfg: dict[str, Any] | None = None) -> str:
+    """Resolve a binary path inside the conda env, falling back to conda run."""
+    runtime = stage_runtime(config, stage_name, stage_cfg=stage_cfg)
+    candidate = Path(runtime["conda_env_root"]) / "bin" / binary
+    if candidate.exists():
+        return str(candidate)
+    return binary
+
+
 def wrap_command_with_env(config: dict[str, Any], stage_name: str, command: list[str], stage_cfg: dict[str, Any] | None = None) -> list[str]:
     runtime = stage_runtime(config, stage_name, stage_cfg=stage_cfg)
     env_name = runtime["conda_env"]
     if not env_name:
         return command
+    # If the command starts with "python", resolve to the env's Python directly.
+    # This avoids issues with "conda run" on systems where multiple conda
+    # installations coexist and activation is unreliable in subprocesses.
+    if command and command[0] == "python":
+        env_python = Path(runtime["conda_env_root"]) / "bin" / "python"
+        if env_python.exists():
+            return [str(env_python), *command[1:]]
     return [runtime["conda_bin"], "run", "--no-capture-output", "-n", env_name, *command]
 
 

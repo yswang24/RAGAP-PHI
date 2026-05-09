@@ -1,6 +1,6 @@
 # External Assets
 
-This repository keeps code and small metadata in Git, but intentionally excludes large models, databases, FASTA corpora, and graph artifacts.
+This repository keeps code and small metadata in Git, but intentionally excludes large models, FASTA corpora, and graph artifacts.
 
 ## Minimal Inference Bundle Paths
 
@@ -20,8 +20,21 @@ These are the release assets the maintainer should publish separately:
 | Path | Required For | Bundled In Git |
 | --- | --- | --- |
 | `assets/models/DNA_bert_4/` | DNABERT DNA embedding | No |
-| `assets/databases/pharokka_v1.4.0_databases/` | Pharokka / PHANOTATE stage | No |
-| local ESM2 cache | Protein embedding | No |
+| local ESM2 cache (`~/.cache/torch/hub/checkpoints/`) | Protein embedding (auto-downloaded by fair-esm) | No |
+
+**Note:** The pharokka database bundle is **not** required for inference. The pipeline calls `phanotate.py` directly, which is installed via conda as part of the `RAGAP` environment.
+
+### Reusing Local Weights
+
+If you already have DNABERT-4 or ESM2 weights from a previous installation, you can reuse them:
+
+- **DNABERT-4**: Symlink to `assets/models/DNA_bert_4`:
+  ```bash
+  ln -s /path/to/your/local/DNA_bert_4 assets/models/DNA_bert_4
+  ```
+  Verify with: `test -f assets/models/DNA_bert_4/config.json`
+
+- **ESM2**: The `fair-esm` library caches weights in `~/.cache/torch/hub/checkpoints/`. If `esm2_t33_650M_UR50D.pt` already exists there, no download is needed.
 
 ## Bundled Small Files
 
@@ -39,9 +52,6 @@ These are the release assets the maintainer should publish separately:
 - DNABERT-4:
   `https://github.com/jerryji1993/DNABERT`
   `https://huggingface.co/zhihan1996/DNA_bert_4`
-- Pharokka:
-  `https://github.com/gbouras13/pharokka`
-  `https://zenodo.org/record/8276347/files/pharokka_v1.4.0_databases.tar.gz`
 - sourmash:
   `https://sourmash.readthedocs.io/en/latest/tutorial-install.html`
 - ESM2:

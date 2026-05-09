@@ -46,12 +46,11 @@ class InferenceAssetLoadingTests(unittest.TestCase):
             )
             dna_script = root / "scripts" / "dna_bert_embed.py"
             phage_esm_script = root / "scripts" / "generate_esm_embeddings_phage.py"
-            train_script = root / "scripts" / "train_hgt_phage_host_weight_RBP_noleak_hard.py"
 
             for path in (graph, node_maps, checkpoint, host_catalog, taxonomy_tree, taxid2species):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("x\n", encoding="utf-8")
-            for path in (dna_script, phage_esm_script, train_script):
+            for path in (dna_script, phage_esm_script):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("print('ok')\n", encoding="utf-8")
             signatures.mkdir(parents=True, exist_ok=True)
@@ -64,7 +63,6 @@ class InferenceAssetLoadingTests(unittest.TestCase):
                 "tools": {
                     "dna_embed_script": str(dna_script),
                     "phage_esm_script": str(phage_esm_script),
-                    "train_script": str(train_script),
                 },
                 "dna_embedding": {
                     "phage": {
@@ -108,7 +106,6 @@ class InferenceAssetLoadingTests(unittest.TestCase):
                 host_catalog=None,
                 taxonomy_tree=None,
                 taxid2species=None,
-                train_script=None,
                 phage_signatures_dir=None,
                 device="cpu",
                 work_dir=None,

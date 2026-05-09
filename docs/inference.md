@@ -61,22 +61,10 @@ git lfs install
 git clone https://huggingface.co/zhihan1996/DNA_bert_4 assets/models/DNA_bert_4
 ```
 
-### Pharokka database bundle
-
-Expected path:
-
-- `assets/databases/pharokka_v1.4.0_databases/`
-
-Official sources:
-
-- `https://github.com/gbouras13/pharokka`
-- `https://zenodo.org/record/8276347/files/pharokka_v1.4.0_databases.tar.gz`
-
-Recommended setup:
+If you already have DNABERT-4 weights locally, symlink instead:
 
 ```bash
-conda activate pharokka_env
-install_databases.py -o assets/databases/pharokka_v1.4.0_databases
+ln -s /path/to/your/local/DNA_bert_4 assets/models/DNA_bert_4
 ```
 
 ### ESM2 weights
@@ -90,7 +78,7 @@ Official sources:
 - `https://github.com/facebookresearch/esm`
 - `https://huggingface.co/facebook/esm2_t33_650M_UR50D`
 
-The repository scripts use `fair-esm`, which downloads weights into the local cache on first use.
+The repository scripts use `fair-esm`, which downloads weights into the local cache on first use. If you already have ESM2 weights cached at `~/.cache/torch/hub/checkpoints/esm2_t33_650M_UR50D.pt` (e.g., from a previous `fair-esm` installation), they will be reused automatically.
 
 ## 4. Minimal Working Checklist
 
@@ -98,13 +86,14 @@ Before running inference, verify:
 
 ```bash
 test -f assets/models/DNA_bert_4/config.json
-test -d assets/databases/pharokka_v1.4.0_databases
 test -f artifacts/ragap_phi/graph/hetero_graph.pt
 test -f artifacts/ragap_phi/graph/node_maps.json
 test -f artifacts/ragap_phi/catalogs/host_catalog.parquet
 test -d artifacts/ragap_phi/cluster/sourmash/phage_phage/signatures
 test -f artifacts/ragap_phi/train/fullhost_v2/best_GAT_attn_fullhost_copymsg_v2.pt
 ```
+
+ESM2 weights are verified automatically at runtime. If you have them cached locally at `~/.cache/torch/hub/checkpoints/`, no download is needed.
 
 Optional:
 
@@ -164,7 +153,8 @@ This Git repository does not currently host:
 
 - the minimal inference bundle under `artifacts/ragap_phi/`
 - the curated training FASTA corpora under `inputs/phage_fasta/` and `inputs/host_fasta/`
-- DNABERT weights
-- Pharokka databases
+- DNABERT-4 weights
+
+ESM2 weights are auto-downloaded by `fair-esm` on first use, or reused from local cache if already present.
 
 If you want the GitHub project to be directly usable by outside users, publish the inference bundle as a Release asset and keep the external download links in this document up to date.

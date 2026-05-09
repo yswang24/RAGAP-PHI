@@ -1,0 +1,31 @@
+name: RAGAP
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/
+dependencies:
+  - python=3.10
+  # Pharokka / gene calling
+  - pharokka
+  - phanotate
+  - prodigal
+  - biopython
+  # Sourmash
+  - sourmash>=4
+  # Core ML / data
+  - pip
+  - pip:
+      - torch==2.5.1
+      - transformers==4.27.0
+      - tokenizers==0.13.3
+      - pyarrow
+      - pandas
+      - numpy
+      - scikit-learn
+      - huggingface-hub
+      - safetensors
+      - tqdm
+      - pyyaml
+      - requests

@@ -13,21 +13,6 @@ from .utils import resolve_path_like
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "pipeline.fullhost_v2.yaml"
 
-STAGE_ORDER = [
-    "dna_embed_phage",
-    "dna_embed_host",
-    "build_catalogs",
-    "build_pairs",
-    "prepare_phage_proteins",
-    "prepare_host_proteins",
-    "embed_phage_proteins",
-    "embed_host_proteins",
-    "build_cluster_assets",
-    "build_graph",
-    "train",
-]
-
-
 def load_yaml(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
@@ -93,15 +78,6 @@ def build_variables(config: dict[str, Any]) -> dict[str, str]:
         "project_root": project_root,
         "dataset_id": dataset_id,
         "artifact_root": artifact_root,
-        "manifest_root": os.path.join(artifact_root, "manifests"),
-        "dna_dir": os.path.join(artifact_root, "dna"),
-        "catalog_dir": os.path.join(artifact_root, "catalogs"),
-        "pairs_dir": os.path.join(artifact_root, "pairs"),
-        "protein_dir": os.path.join(artifact_root, "proteins"),
-        "cluster_dir": os.path.join(artifact_root, "cluster"),
-        "graph_dir": os.path.join(artifact_root, "graph"),
-        "train_dir": os.path.join(artifact_root, "train"),
-        "slurm_dir": os.path.join(artifact_root, "slurm"),
     }
     for section_name in ("inputs", "tools"):
         section = config.get(section_name, {})
@@ -126,7 +102,6 @@ def prepare_config(config_path: Path, overrides: list[str]) -> dict[str, Any]:
     rendered["_variables"] = variables
     rendered["_config_path"] = str(config_path.resolve())
     rendered["_project_root"] = str(PROJECT_ROOT)
-    rendered["_pipeline_entry"] = str(PROJECT_ROOT / "pipeline.py")
     return rendered
 
 

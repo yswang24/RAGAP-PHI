@@ -1,26 +1,25 @@
 # RAGAP-PHI
 
-RAGAP-PHI is a cleaned, GitHub-ready packaging of the RAGAP phage-host prediction workflow. This repository is prepared for inference-first release: users clone the code, download a minimal inference bundle, place a few third-party assets locally, and run `infer_phage_host.py` on a single phage FASTA file.
+RAGAP-PHI is a phage-host interaction prediction system using a heterogeneous graph attention network (GATv2). Given a query phage FASTA file, it predicts which bacterial host the phage can infect by embedding the query, attaching it to a frozen training graph, and scoring all candidate hosts.
 
 ## What This Repository Includes
 
 - Inference entrypoint: `infer_phage_host.py`
-- Full pipeline entrypoint: `pipeline.py`
-- Internal orchestration code under `ragap_pipeline/`
-- Vendored helper scripts under `scripts/`
-- Main config under `configs/pipeline.fullhost_v2.yaml`
+- Inference engine under `ragap_pipeline/inference.py`
+- GATv2 model definition under `ragap_pipeline/model.py`
+- Helper scripts under `scripts/` (DNA embedding, protein embedding, bundle packaging)
+- Inference config under `configs/pipeline.fullhost_v2.yaml`
 - Conda environment files under `envs/`
 - Small inference metadata files under `data/`
-- Placeholder input directories under `inputs/`
 
 ## Release Model
 
-This repository is intended to be published together with one separate Release asset:
+This repository is published together with a separate inference bundle:
 
 1. GitHub repository: code, configs, small metadata.
-2. Inference bundle archive: the minimal cached artifacts needed by the current inference code path.
+2. Inference bundle archive: the minimal cached artifacts needed by inference.
 
-For this project, a checkpoint alone is not enough. The inference code attaches a new phage into a frozen training graph and computes phage-phage similarity against a cached training signature library.
+A checkpoint alone is not enough. The inference code attaches a new phage into a frozen training graph and computes phage-phage similarity against a cached training signature library.
 
 ## Minimal Inference Bundle
 
@@ -66,41 +65,28 @@ python scripts/package_inference_bundle.py \
 
 Add `--include-manifest` only if you also want to retain `manifests/train.json` as metadata.
 
-## Third-Party Assets Users Still Need
-
-These large external assets are not committed to Git:
-
-- `assets/models/DNA_bert_4/`
-- `assets/databases/pharokka_v1.4.0_databases/`
-- ESM2 weights, usually downloaded to the local cache on first use
-
-Official sources and setup notes are listed in [docs/assets.md](docs/assets.md) and [docs/inference.md](docs/inference.md).
-
 ## Quick Start
 
-Create the required Conda environments:
+### One-click setup
 
 ```bash
-conda env create -f envs/PHPGAT.yaml
-conda env create -f envs/dnaberts.yaml
-conda env create -f envs/esm.yaml
-conda env create -f envs/pharokka.yaml
-conda env create -f envs/sourmash.yaml
+git clone https://github.com/yswang24/RAGAP-PHI.git
+cd RAGAP-PHI
+bash setup.sh
 ```
 
-If you want the top-level scripts to auto-bootstrap into the base environment, set:
+This creates Conda environments, downloads model weights (DNABERT-4 + ESM2), and fetches the inference bundle from GitHub Release — all in one step.
+
+Options:
 
 ```bash
-export RAGAP_BOOTSTRAP_PYTHON=/path/to/envs/PHPGAT/bin/python
+bash setup.sh --verify       # check everything without downloading
+bash setup.sh --envs-only    # create conda environments only
+bash setup.sh --models-only  # download model weights only
+bash setup.sh --bundle-only  # download inference bundle only
 ```
 
-Then place:
-
-- the inference bundle under `artifacts/ragap_phi/`
-- DNABERT under `assets/models/DNA_bert_4/`
-- Pharokka databases under `assets/databases/pharokka_v1.4.0_databases/`
-
-Run inference:
+### Run inference
 
 ```bash
 python infer_phage_host.py \
@@ -118,73 +104,40 @@ python infer_phage_host.py \
   --output result.tsv
 ```
 
+For batch processing (multi-record FASTA, each record processed separately):
+
+```bash
+python infer_phage_host.py \
+  --input multi_phage.fa \
+  --mode species \
+  --output batch_results.tsv \
+  --batch
+```
+
 ## Repository Layout
 
 ```text
 RAGAP-PHI/
-  infer_phage_host.py
-  pipeline.py
-  configs/
-  envs/
+  setup.sh                     # One-click setup (envs + models + bundle check)
+  infer_phage_host.py          # Inference entrypoint
   ragap_pipeline/
+    inference.py               # Full inference engine
+    model.py                   # GATv2 model definition
+    config.py                  # YAML config loading
+    execution.py               # Conda env resolution
+    utils.py                   # Shared utilities
   scripts/
-  data/
-  inputs/
-  assets/
-  tests/
-```
-
-## What Is Not Committed
-
-These assets are intentionally kept out of normal Git history:
-
-- `assets/models/DNA_bert_4/`
-- `assets/databases/pharokka_v1.4.0_databases/`
-- `artifacts/ragap_phi/graph/hetero_graph.pt`
-- `artifacts/ragap_phi/graph/node_maps.json`
-- `artifacts/ragap_phi/catalogs/host_catalog.parquet`
-- `artifacts/ragap_phi/cluster/sourmash/phage_phage/signatures/`
-- `artifacts/ragap_phi/train/fullhost_v2/best_GAT_attn_fullhost_copymsg_v2.pt`
-- optional: `artifacts/ragap_phi/manifests/train.json`
-- `inputs/phage_fasta/`
-- `inputs/host_fasta/`
-- `inputs/virus_host_with_GCF.tsv`
-- `inputs/edges/*.tsv`
-- `data/taxonomy/taxonomy_poincare_tangent.parquet`
-
-## Training
-
-Training support is still present, but it is not the primary publication path for this repository.
-
-The public inference-oriented repository does not ship several training-only inputs. If you want to rerun training, you must provide them locally, including:
-
-- `inputs/virus_host_with_GCF.tsv`
-- `inputs/edges/*.tsv`
-- `data/taxonomy/taxonomy_poincare_tangent.parquet`
-- the FASTA corpora under `inputs/phage_fasta/` and `inputs/host_fasta/`
-
-Default config:
-
-- `configs/pipeline.fullhost_v2.yaml`
-
-Dry-run the stage plan:
-
-```bash
-python pipeline.py status
-```
-
-Run the full pipeline:
-
-```bash
-python pipeline.py run
-```
-
-Override paths without editing the YAML:
-
-```bash
-python pipeline.py run \
-  --set inputs.phage_fasta_dir=/abs/path/to/phage_fasta \
-  --set inputs.host_fasta_dir=/abs/path/to/host_fasta
+    setup_models.py            # Download DNABERT-4 and ESM2 weights
+    dna_bert_embed.py          # DNABERT DNA embedding
+    generate_esm_embeddings_phage.py  # ESM2 phage protein embedding
+    package_inference_bundle.py      # Bundle packaging
+  configs/
+    pipeline.fullhost_v2.yaml  # Inference config
+  envs/                        # Conda environment files
+  data/                        # Taxonomy metadata
+  assets/                      # Model weight placeholders
+  tests/                       # Inference tests
+  docs/                        # Documentation
 ```
 
 ## Documentation

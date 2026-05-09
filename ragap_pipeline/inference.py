@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import importlib.util
 import json
 import logging
 import os
@@ -26,6 +25,7 @@ from torch_geometric.data import HeteroData
 
 from .config import prepare_config
 from .execution import DEFAULT_CONDA_BIN, subprocess_env, wrap_command_with_env
+from .model import GATv2MiniModel
 
 
 LOGGER = logging.getLogger(__name__)
@@ -68,7 +68,6 @@ class InferenceAssets:
     manifest_path: Path
     config_path: Path
     runtime_config: dict[str, Any]
-    train_script: Path
     checkpoint: Path
     graph: Path
     node_maps: Path
@@ -143,7 +142,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--host-catalog", default=None, help="Override host catalog parquet path")
     parser.add_argument("--taxonomy-tree", default=None, help="Override taxonomy_with_alias parquet path")
     parser.add_argument("--taxid2species", default=None, help="Override taxid->species TSV path")
-    parser.add_argument("--train-script", default=None, help="Override training script path for model loading")
     parser.add_argument(
         "--phage-signatures-dir",
         default=None,
@@ -156,6 +154,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--work-dir", default=None, help="Override work directory")
     parser.add_argument("--cleanup", action="store_true", help="Remove intermediate files after success")
+    parser.add_argument("--batch", action="store_true", help="Split multi-record FASTA and process each record separately")
     return parser.parse_args(argv)
 
 
@@ -184,19 +183,6 @@ def _checkpoint_from_manifest(manifest: dict[str, Any]) -> Path:
         if output_path.endswith(".pt"):
             return Path(output_path).resolve()
     return DEFAULT_CHECKPOINT.resolve()
-
-
-def _training_module(script_path: Path) -> Any:
-    module_name = f"ragap_train_{script_path.stem}"
-    if module_name in sys.modules:
-        return sys.modules[module_name]
-    spec = importlib.util.spec_from_file_location(module_name, script_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Unable to import training script: {script_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 def _default_device(requested: str) -> str:
@@ -457,11 +443,6 @@ def load_inference_assets(args: argparse.Namespace) -> InferenceAssets:
     taxid2species = _resolve_path(args.taxid2species) or Path(
         _arg_value(command, "--taxid2species_tsv", str(DEFAULT_TAXID2SPECIES))
     ).resolve()
-    train_script = (
-        _resolve_path(args.train_script)
-        or _resolve_path(manifest.get("script_path"))
-        or Path(config["tools"]["train_script"]).resolve()
-    )
 
     similarity_cfg = config["cluster_assets"]["similarity_edges"]
     phage_similarity_cfg = similarity_cfg["phage"]
@@ -473,7 +454,6 @@ def load_inference_assets(args: argparse.Namespace) -> InferenceAssets:
         manifest_path=manifest_path,
         config_path=config_path,
         runtime_config=runtime_config,
-        train_script=train_script,
         checkpoint=checkpoint,
         graph=graph,
         node_maps=node_maps,
@@ -525,7 +505,6 @@ def load_inference_assets(args: argparse.Namespace) -> InferenceAssets:
         assets.taxid2species,
         assets.dna_embed_script,
         assets.phage_esm_script,
-        assets.train_script,
         assets.phage_signatures_dir,
     ):
         if not required_path.exists():
@@ -661,6 +640,15 @@ def run_protein_embedding(faa_path: Path, work_dir: Path, assets: InferenceAsset
     return result
 
 
+def _resolve_sourmash_env_binary(assets: InferenceAssets, binary: str) -> str:
+    """Resolve a binary from the sourmash conda env, falling back to conda run."""
+    envs_root = Path(assets.conda_bin).resolve().parent.parent / "envs"
+    candidate = envs_root / assets.sourmash_env / "bin" / binary
+    if candidate.exists():
+        return str(candidate)
+    return binary
+
+
 def _run_sourmash_command(
     assets: InferenceAssets,
     command: list[str],
@@ -669,8 +657,11 @@ def _run_sourmash_command(
     env = dict(os.environ)
     env["NUMEXPR_MAX_THREADS"] = "64"
     env["NUMEXPR_NUM_THREADS"] = "64"
-    wrapped = [assets.conda_bin, "run", "--no-capture-output", "-n", assets.sourmash_env, *command]
-    _run_logged_command(wrapped, env, log_path)
+    # Resolve binaries from the sourmash env directly to avoid conda run issues.
+    resolved = list(command)
+    if resolved and resolved[0] in ("sourmash", "python"):
+        resolved[0] = _resolve_sourmash_env_binary(assets, resolved[0])
+    _run_logged_command(resolved, env, log_path)
 
 
 def run_similarity_search(
@@ -785,13 +776,12 @@ def _host_taxid_array(data: HeteroData, host_catalog: Path, host_map: dict[str, 
 
 
 def load_model(assets: InferenceAssets, data: HeteroData, device: str) -> torch.nn.Module:
-    training_module = _training_module(assets.train_script)
     in_dims = {}
     for node_type in data.node_types:
         if "x" not in data[node_type]:
             raise RuntimeError(f"Node type missing x features: {node_type}")
         in_dims[node_type] = int(data[node_type].x.shape[1])
-    model = training_module.GATv2MiniModel(
+    model = GATv2MiniModel(
         metadata=data.metadata(),
         in_dims=in_dims,
         hidden_dim=assets.hidden_dim,
@@ -894,6 +884,37 @@ def _work_dir_for(args: argparse.Namespace, phage_id: str) -> Path:
     return (PROJECT_ROOT / "artifacts" / "inference" / f"{phage_id}_{timestamp}").resolve()
 
 
+def _read_fasta_id(path: Path) -> str:
+    """Read the first header line of a FASTA file and return the sequence ID."""
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if line.startswith(">"):
+                # Take the first whitespace-delimited token after ">"
+                return line[1:].split()[0]
+    raise ValueError(f"No FASTA header found in {path}")
+
+
+def _make_unique_phage_id(base: str, existing: set[str]) -> str:
+    """Generate a unique phage_id by appending a counter if needed."""
+    if base not in existing:
+        return base
+    counter = 1
+    while f"{base}_{counter}" in existing:
+        counter += 1
+    return f"{base}_{counter}"
+
+
+def _rewrite_fasta_header(src: Path, dst: Path, new_id: str) -> None:
+    """Copy a FASTA file, replacing all header lines with new_id."""
+    with src.open("r", encoding="utf-8") as inp, dst.open("w", encoding="utf-8") as out:
+        for line in inp:
+            if line.startswith(">"):
+                out.write(f">{new_id}\n")
+            else:
+                out.write(line)
+
+
 def run_inference(args: argparse.Namespace) -> dict[str, Any]:
     input_path = Path(args.input).expanduser().resolve()
     if not input_path.exists():
@@ -901,15 +922,26 @@ def run_inference(args: argparse.Namespace) -> dict[str, Any]:
     if input_path.suffix.lower() not in SUPPORTED_FASTA_SUFFIXES:
         raise ValueError(f"Unsupported FASTA suffix: {input_path.suffix}")
 
-    phage_id = input_path.stem
-    work_dir = _work_dir_for(args, phage_id)
+    original_id = _read_fasta_id(input_path)
+    original_input_path = input_path
+    # Use file stem for work_dir (safe for directory names), FASTA header for ID logic.
+    work_dir = _work_dir_for(args, input_path.stem)
     work_dir.mkdir(parents=True, exist_ok=True)
     assets = load_inference_assets(args)
     node_maps = _read_json(assets.node_maps)
-    if phage_id in node_maps.get("phage_map", {}):
-        raise ValueError(
-            f"Input stem '{phage_id}' already exists in the training graph. Rename the input file first."
+
+    # Auto-rename if the phage_id already exists in the training graph.
+    existing_phage_ids = set(node_maps.get("phage_map", {}).keys())
+    phage_id = _make_unique_phage_id(original_id, existing_phage_ids)
+    if phage_id != original_id:
+        LOGGER.warning(
+            "Phage ID '%s' already exists in the training graph; using '%s' instead.",
+            original_id,
+            phage_id,
         )
+        rewritten = work_dir / f"{phage_id}{input_path.suffix}"
+        _rewrite_fasta_header(input_path, rewritten, phage_id)
+        input_path = rewritten
 
     query = prepare_query(input_path, work_dir, assets)
     data = _safe_torch_load_graph(assets.graph)
@@ -951,8 +983,8 @@ def run_inference(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     result = {
-        "input_file": str(input_path),
-        "phage_id": query.phage_id,
+        "input_file": str(original_input_path),
+        "phage_id": original_id,
         "mode": args.mode,
         "top_host_id": host_id,
         "top_host_taxid": host_taxid,
@@ -969,15 +1001,93 @@ def run_inference(args: argparse.Namespace) -> dict[str, Any]:
         result["work_dir"] = str(work_dir)
     selected_label = top_species if args.mode == "species" else top_genus
     print(
-        f"{query.phage_id}\tmode={args.mode}\tlabel={selected_label}\thost={host_id}\tscore={score:.6f}"
+        f"{original_id}\tmode={args.mode}\tlabel={selected_label}\thost={host_id}\tscore={score:.6f}"
     )
     return result
+
+
+def _split_fasta(input_path: Path, output_dir: Path) -> list[Path]:
+    """Split a multi-record FASTA into individual files, one per record."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
+    current_id: str | None = None
+    current_lines: list[str] = []
+
+    def _flush() -> None:
+        if current_id and current_lines:
+            out_path = output_dir / f"{current_id}{input_path.suffix}"
+            with out_path.open("w", encoding="utf-8") as handle:
+                handle.writelines(current_lines)
+            paths.append(out_path)
+
+    with input_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith(">"):
+                _flush()
+                current_id = line[1:].split()[0].strip()
+                current_lines = [line]
+            elif current_lines:
+                current_lines.append(line)
+    _flush()
+    return paths
+
+
+def run_batch_inference(args: argparse.Namespace) -> list[dict[str, Any]]:
+    """Split a multi-record FASTA and run inference on each record."""
+    input_path = Path(args.input).expanduser().resolve()
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input FASTA missing: {input_path}")
+
+    output_path = Path(args.output).expanduser().resolve()
+    split_dir = output_path.parent / f"{input_path.stem}_split"
+    split_files = _split_fasta(input_path, split_dir)
+    LOGGER.info("Split %s into %d individual FASTA files", input_path.name, len(split_files))
+
+    results: list[dict[str, Any]] = []
+    for i, fasta_file in enumerate(split_files, 1):
+        LOGGER.info("Processing %d/%d: %s", i, len(split_files), fasta_file.name)
+        single_args = argparse.Namespace(**{**vars(args), "input": str(fasta_file)})
+        try:
+            result = run_inference(single_args)
+            results.append(result)
+        except Exception as exc:
+            LOGGER.error("Failed to process %s: %s", fasta_file.name, exc)
+            results.append({
+                "input_file": str(fasta_file),
+                "phage_id": fasta_file.stem,
+                "mode": args.mode,
+                "top_host_id": "ERROR",
+                "top_host_taxid": -1,
+                "top_species": "ERROR",
+                "top_genus": "ERROR",
+                "score": 0.0,
+                "checkpoint": "",
+                "work_dir": "",
+            })
+
+    # Write combined results
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "input_file", "phage_id", "mode", "top_host_id", "top_host_taxid",
+        "top_species", "top_genus", "score", "checkpoint", "work_dir",
+    ]
+    with output_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        for row in results:
+            writer.writerow({k: row.get(k, "") for k in fieldnames})
+
+    LOGGER.info("Batch inference complete: %d results written to %s", len(results), output_path)
+    return results
 
 
 def main(argv: list[str] | None = None) -> int:
     configure_logging()
     args = parse_args(argv)
-    run_inference(args)
+    if args.batch:
+        run_batch_inference(args)
+    else:
+        run_inference(args)
     return 0
 
 
