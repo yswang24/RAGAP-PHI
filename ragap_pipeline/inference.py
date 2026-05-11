@@ -977,8 +977,6 @@ def run_inference(args: argparse.Namespace) -> dict[str, Any]:
     # Build result based on mode
     result: dict[str, Any] = {
         "phage_id": original_id,
-        "top_host_id": host_id,
-        "top_host_taxid": host_taxid,
     }
     if args.mode is None:
         result["top_species"] = top_species
@@ -996,10 +994,10 @@ def run_inference(args: argparse.Namespace) -> dict[str, Any]:
 
     # Print summary
     if args.mode is None:
-        print(f"{original_id}\tspecies={top_species}\tgenus={top_genus}\thost={host_id}\tscore={score:.6f}")
+        print(f"{original_id}\tspecies={top_species}\tgenus={top_genus}\tscore={score:.6f}")
     else:
         label = top_species if args.mode == "species" else top_genus
-        print(f"{original_id}\t{args.mode}={label}\thost={host_id}\tscore={score:.6f}")
+        print(f"{original_id}\t{args.mode}={label}\tscore={score:.6f}")
 
     return result
 
@@ -1310,8 +1308,6 @@ def run_batch_inference(args: argparse.Namespace) -> list[dict[str, Any]]:
 
         row: dict[str, Any] = {
             "phage_id": original_id,
-            "top_host_id": host_id,
-            "top_host_taxid": host_taxid,
         }
         if args.mode is None:
             row["top_species"] = top_species

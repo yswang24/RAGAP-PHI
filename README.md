@@ -69,11 +69,11 @@ python infer_phage_host.py --input multi_phage.fa --output batch_results.tsv --b
 
 Default output (both species and genus):
 
-| phage_id | top_host_id | top_host_taxid | top_species | top_genus | score |
-|----------|-------------|----------------|-------------|-----------|-------|
-| KX266586 | GCF_000005845 | 562 | Escherichia coli | Escherichia | 0.999909 |
+| phage_id | top_species | top_genus | score |
+|----------|-------------|-----------|-------|
+| KX266586 | Escherichia coli | Escherichia | 0.999909 |
 
-With `--mode species`: columns are `phage_id, top_host_id, top_host_taxid, top_species, score`
+With `--mode species`: columns are `phage_id, top_species, score`
 
 ## Repository Layout
 
