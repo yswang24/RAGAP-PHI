@@ -25,6 +25,9 @@ from torch_geometric.data import HeteroData
 
 from .config import prepare_config
 from .execution import DEFAULT_CONDA_BIN, subprocess_env, wrap_command_with_env
+
+# Imported lazily in _batch_similarity_search to avoid hard dep when not using batch mode.
+_load_file_as_signatures = None
 from .model import GATv2MiniModel
 
 
@@ -1027,8 +1030,204 @@ def _split_fasta(input_path: Path, output_dir: Path) -> list[Path]:
     return paths
 
 
+def _batch_dna_embedding(
+    input_paths: list[Path],
+    work_dir: Path,
+    assets: InferenceAssets,
+) -> dict[str, torch.Tensor]:
+    """Run DNABERT embedding for all phages in one invocation."""
+    fasta_dir = work_dir / "dna" / "input"
+    out_dir = work_dir / "dna" / "out"
+    log_path = work_dir / "logs" / "dna_embed.log"
+    for p in input_paths:
+        _link_single_input(p, fasta_dir)
+    command = [
+        "python",
+        str(assets.dna_embed_script),
+        "--fasta_dir", str(fasta_dir),
+        "--out_dir", str(out_dir),
+        "--model", assets.dna_model,
+        "--k", str(assets.dna_k),
+        "--window_tokens", str(assets.dna_window_tokens),
+        "--stride_tokens", str(assets.dna_stride_tokens),
+        "--batch_size", str(assets.dna_batch_size),
+        "--device", "cuda" if torch.cuda.is_available() else "cpu",
+        "--precision", assets.dna_precision,
+        "--log", str(log_path),
+        "--seed", str(assets.dna_seed),
+    ]
+    if assets.dna_max_windows is not None:
+        command.extend(["--max_windows", str(assets.dna_max_windows)])
+    wrapped = wrap_command_with_env(assets.runtime_config, "dna_embed_phage", command)
+    env = subprocess_env(assets.runtime_config, "dna_embed_phage")
+    _run_logged_command(wrapped, env, log_path)
+    results: dict[str, torch.Tensor] = {}
+    for p in input_paths:
+        parquet_path = out_dir / f"{p.stem}.parquet"
+        if not parquet_path.exists():
+            raise RuntimeError(f"DNA embedding parquet missing: {parquet_path}")
+        results[p.stem] = aggregate_sequence_embeddings(parquet_path, emb_col="embedding")
+    LOGGER.info("Batch DNA embedding complete for %d phages", len(results))
+    return results
+
+
+def _batch_protein_embedding(
+    input_paths: list[Path],
+    work_dir: Path,
+    assets: InferenceAssets,
+) -> dict[str, dict[str, torch.Tensor]]:
+    """Run phanotate + ESM2 embedding for all phages."""
+    faa_dir = work_dir / "proteins" / "phage_faa"
+    faa_dir.mkdir(parents=True, exist_ok=True)
+    # Gene calling per phage (fast, no model)
+    for input_path in input_paths:
+        faa_path = faa_dir / f"{input_path.stem}.faa"
+        if faa_path.exists() and faa_path.stat().st_size > 0:
+            continue
+        log_path = work_dir / "logs" / f"phanotate_{input_path.stem}.log"
+        command = [assets.phanotate_bin, str(input_path), "-f", "faa", *assets.phanotate_extra_args]
+        wrapped = wrap_command_with_env(assets.runtime_config, "prepare_phage_proteins", command)
+        env = subprocess_env(assets.runtime_config, "prepare_phage_proteins")
+        _run_logged_command(wrapped, env, log_path, stdout_path=faa_path)
+        if not faa_path.exists() or faa_path.stat().st_size == 0:
+            raise RuntimeError(f"Phanotate produced no FAA output: {faa_path}")
+    # ESM2 embedding in one invocation
+    out_dir = work_dir / "proteins" / "embeddings"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    log_path = work_dir / "logs" / "phage_esm_batch.log"
+    command = [
+        "python",
+        str(assets.phage_esm_script),
+        "--faa-dir", str(faa_dir),
+        "--out", str(out_dir),
+        "--model-name", assets.phage_esm_model_name,
+        "--batch-size", str(assets.phage_esm_batch_size),
+        "--repr-l", str(assets.phage_esm_repr_l),
+        "--device", "cuda" if torch.cuda.is_available() else "cpu",
+        "--workers", str(assets.phage_esm_workers),
+    ]
+    wrapped = wrap_command_with_env(assets.runtime_config, "embed_phage_proteins", command)
+    env = subprocess_env(assets.runtime_config, "embed_phage_proteins")
+    _run_logged_command(wrapped, env, log_path)
+    # Collect results
+    results: dict[str, dict[str, torch.Tensor]] = {}
+    for input_path in input_paths:
+        pickle_path = out_dir / f"{input_path.stem}.pkl"
+        if not pickle_path.exists():
+            raise RuntimeError(f"Phage protein embedding pickle missing: {pickle_path}")
+        payload = _load_pickle(pickle_path)
+        if not isinstance(payload, dict) or not payload:
+            raise RuntimeError(f"Phage protein embedding pickle is empty: {pickle_path}")
+        protein_dict: dict[str, torch.Tensor] = {}
+        for protein_id, embedding in payload.items():
+            protein_dict[str(protein_id)] = _tensor_from_embedding(embedding, torch.float32)
+        results[input_path.stem] = protein_dict
+    LOGGER.info("Batch protein embedding complete for %d phages", len(results))
+    return results
+
+
+def _batch_similarity_search(
+    input_paths: list[Path],
+    work_dir: Path,
+    assets: InferenceAssets,
+) -> dict[str, list[tuple[str, str, str, float]]]:
+    """Run similarity search for all phages, loading reference signatures once."""
+    sourmash_dir = work_dir / "sourmash"
+    sourmash_dir.mkdir(parents=True, exist_ok=True)
+    sketch_log = work_dir / "logs" / "sourmash_sketch.log"
+    sketch_log.parent.mkdir(parents=True, exist_ok=True)
+
+    # Pre-load all reference signatures once
+    global _load_file_as_signatures
+    if _load_file_as_signatures is None:
+        from sourmash import load_file_as_signatures
+        _load_file_as_signatures = load_file_as_signatures
+    LOGGER.info("Loading reference phage signatures from %s ...", assets.phage_signatures_dir)
+    ref_sigs: dict[str, Any] = {}
+    for sig_path in sorted(assets.phage_signatures_dir.glob("*.sig")):
+        sig = next(iter(_load_file_as_signatures(str(sig_path))))
+        ref_sigs[sig_path.stem] = sig.minhash
+    LOGGER.info("Loaded %d reference signatures", len(ref_sigs))
+
+    results: dict[str, list[tuple[str, str, str, float]]] = {}
+    for input_path in input_paths:
+        phage_id = input_path.stem
+        query_sig = sourmash_dir / f"{phage_id}.sig"
+        # Sketch the query phage
+        _run_sourmash_command(
+            assets,
+            [
+                assets.sourmash_bin,
+                "sketch", "dna",
+                "-p", f"k={assets.phage_similarity_kmer_size},scaled={assets.phage_similarity_scaled},abund",
+                "-o", str(query_sig),
+                str(input_path),
+            ],
+            sketch_log,
+        )
+        if not query_sig.exists():
+            raise RuntimeError(f"Query signature missing after sourmash sketch: {query_sig}")
+        # Compare against pre-loaded references in memory
+        query = next(iter(_load_file_as_signatures(str(query_sig))))
+        similarities: dict[str, float] = {}
+        for ref_id, ref_minhash in ref_sigs.items():
+            score = query.minhash.jaccard(ref_minhash)
+            if score > 0:
+                similarities[ref_id] = score
+        rows = build_similarity_edge_rows(
+            phage_id, similarities, threshold=assets.phage_similarity_threshold,
+        )
+        results[phage_id] = rows
+        LOGGER.info("Phage %s: retained %d similarity edges", phage_id, len(rows))
+    return results
+
+
+def augment_graph_with_queries(
+    data: HeteroData,
+    node_maps: dict[str, dict[str, int]],
+    queries: list[tuple[str, torch.Tensor, dict[str, torch.Tensor], list[tuple[str, str, str, float]]]],
+) -> tuple[dict[str, dict[str, int]], dict[str, int]]:
+    """Augment graph with multiple query phages. Returns (updated_maps, {phage_id: index})."""
+    query_indices: dict[str, int] = {}
+    for phage_id, dna_emb, protein_embs, sim_rows in queries:
+        if phage_id in node_maps.get("phage_map", {}):
+            LOGGER.warning("Phage %s already in graph, skipping", phage_id)
+            query_indices[phage_id] = node_maps["phage_map"][phage_id]
+            continue
+        idx, node_maps, _ = augment_graph_with_query(data, node_maps, phage_id, dna_emb, protein_embs, sim_rows)
+        query_indices[phage_id] = idx
+    return node_maps, query_indices
+
+
+def score_hosts_batch(
+    model: torch.nn.Module,
+    data: HeteroData,
+    query_phage_indices: dict[str, int],
+    device: str,
+) -> dict[str, torch.Tensor]:
+    """Score all query phages against all hosts in one forward pass."""
+    compute_device = _default_device(device)
+    with torch.inference_mode():
+        x_dict = {node_type: data[node_type].x.to(compute_device) for node_type in data.node_types}
+        edge_index_dict = {}
+        for edge_type in data.edge_types:
+            edge_index = getattr(data[edge_type], "edge_index", None)
+            if edge_index is None:
+                continue
+            edge_index_dict[edge_type] = edge_index.to(compute_device)
+        out = model(x_dict, edge_index_dict, edge_attr_dict=None)
+        host_emb = out["host"]  # (H, D)
+        results: dict[str, torch.Tensor] = {}
+        for phage_id, idx in query_phage_indices.items():
+            phage_emb = out["phage"][idx].view(1, -1)
+            logits = torch.matmul(phage_emb, host_emb.t()).view(-1)
+            logits = logits * torch.exp(model.logit_scale)
+            results[phage_id] = torch.sigmoid(logits).detach().cpu()
+    return results
+
+
 def run_batch_inference(args: argparse.Namespace) -> list[dict[str, Any]]:
-    """Split a multi-record FASTA and run inference on each record."""
+    """Optimized batch inference: models loaded once, phased processing."""
     input_path = Path(args.input).expanduser().resolve()
     if not input_path.exists():
         raise FileNotFoundError(f"Input FASTA missing: {input_path}")
@@ -1038,33 +1237,93 @@ def run_batch_inference(args: argparse.Namespace) -> list[dict[str, Any]]:
     split_files = _split_fasta(input_path, split_dir)
     LOGGER.info("Split %s into %d individual FASTA files", input_path.name, len(split_files))
 
+    work_dir = output_path.parent / f"{input_path.stem}_batch_work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    assets = load_inference_assets(args)
+    node_maps = _read_json(assets.node_maps)
+
+    # Check for ID conflicts and auto-rename
+    existing_ids = set(node_maps.get("phage_map", {}).keys())
+    id_map: dict[str, str] = {}  # original_fasta_stem -> actual_phage_id
+    renamed_files: list[Path] = []
+    for f in split_files:
+        fasta_id = _read_fasta_id(f)
+        unique_id = _make_unique_phage_id(fasta_id, existing_ids)
+        existing_ids.add(unique_id)
+        id_map[f.stem] = unique_id
+        if unique_id != fasta_id:
+            LOGGER.warning("Phage ID '%s' already exists; using '%s'", fasta_id, unique_id)
+            rewritten = work_dir / "renamed" / f"{unique_id}{f.suffix}"
+            _rewrite_fasta_header(f, rewritten, unique_id)
+            renamed_files.append(rewritten)
+        else:
+            renamed_files.append(f)
+
+    # Phase 1: Batch DNA embedding
+    LOGGER.info("Phase 1/4: Batch DNA embedding ...")
+    dna_embeddings = _batch_dna_embedding(renamed_files, work_dir, assets)
+
+    # Phase 2: Batch gene calling + protein embedding
+    LOGGER.info("Phase 2/4: Batch gene calling + protein embedding ...")
+    protein_embeddings = _batch_protein_embedding(renamed_files, work_dir, assets)
+
+    # Phase 3: Batch similarity search
+    LOGGER.info("Phase 3/4: Batch similarity search ...")
+    similarity_results = _batch_similarity_search(renamed_files, work_dir, assets)
+
+    # Phase 4: Batch graph augmentation + scoring
+    LOGGER.info("Phase 4/4: Graph augmentation + scoring ...")
+    data = _safe_torch_load_graph(assets.graph)
+
+    # Build query list in the order of renamed_files
+    queries: list[tuple[str, torch.Tensor, dict[str, torch.Tensor], list[tuple[str, str, str, float]]]] = []
+    for f in renamed_files:
+        phage_id = f.stem
+        queries.append((phage_id, dna_embeddings[phage_id], protein_embeddings[phage_id], similarity_results[phage_id]))
+
+    node_maps, query_indices = augment_graph_with_queries(data, node_maps, queries)
+    model = load_model(assets, data, device=_default_device(args.device))
+    all_scores = score_hosts_batch(model, data, query_indices, _default_device(args.device))
+
+    # Resolve host info
+    host_map = node_maps["host_map"]
+    host_idx_to_id = {int(idx): hid for hid, idx in host_map.items()}
+    host_taxids = _host_taxid_array(data, assets.host_catalog, host_map)
+    species_lookup = {
+        int(row.taxid): str(row.species)
+        for row in pd.read_csv(assets.taxid2species, sep="\t").itertuples(index=False)
+    }
+    taxonomy_nodes = _taxonomy_nodes(assets.taxonomy_tree)
+
+    # Build results
     results: list[dict[str, Any]] = []
-    for i, fasta_file in enumerate(split_files, 1):
-        LOGGER.info("Processing %d/%d: %s", i, len(split_files), fasta_file.name)
-        single_args = argparse.Namespace(**{**vars(args), "input": str(fasta_file)})
-        try:
-            result = run_inference(single_args)
-            results.append(result)
-        except Exception as exc:
-            LOGGER.error("Failed to process %s: %s", fasta_file.name, exc)
-            error_row: dict[str, Any] = {
-                "phage_id": fasta_file.stem,
-                "top_host_id": "ERROR",
-                "top_host_taxid": -1,
-            }
-            if args.mode is None:
-                error_row["top_species"] = "ERROR"
-                error_row["top_genus"] = "ERROR"
-            elif args.mode == "species":
-                error_row["top_species"] = "ERROR"
-            else:
-                error_row["top_genus"] = "ERROR"
-            error_row["score"] = 0.0
-            results.append(error_row)
+    for f, original_fasta_path in zip(renamed_files, split_files):
+        phage_id = f.stem
+        original_id = id_map.get(f.stem, phage_id)
+        scores = all_scores[phage_id]
+        top_host_idx = int(torch.argmax(scores).item())
+        score = float(scores[top_host_idx].item())
+        host_id = host_idx_to_id[top_host_idx]
+        host_taxid = int(host_taxids[top_host_idx])
+        top_species = resolve_species_name(host_taxid, species_lookup)
+        top_genus = resolve_genus_name(host_taxid, taxonomy_nodes)
 
-    # Write combined results
+        row: dict[str, Any] = {
+            "phage_id": original_id,
+            "top_host_id": host_id,
+            "top_host_taxid": host_taxid,
+        }
+        if args.mode is None:
+            row["top_species"] = top_species
+            row["top_genus"] = top_genus
+        elif args.mode == "species":
+            row["top_species"] = top_species
+        else:
+            row["top_genus"] = top_genus
+        row["score"] = round(score, 6)
+        results.append(row)
+
     _save_result_tsv(output_path, results)
-
     LOGGER.info("Batch inference complete: %d results written to %s", len(results), output_path)
     return results
 

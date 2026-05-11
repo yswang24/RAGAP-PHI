@@ -96,13 +96,13 @@ def wrap_command_with_env(config: dict[str, Any], stage_name: str, command: list
     env_name = runtime["conda_env"]
     if not env_name:
         return command
-    # If the command starts with "python", resolve to the env's Python directly.
+    # Resolve the first token (binary) to the env's bin directory directly.
     # This avoids issues with "conda run" on systems where multiple conda
     # installations coexist and activation is unreliable in subprocesses.
-    if command and command[0] == "python":
-        env_python = Path(runtime["conda_env_root"]) / "bin" / "python"
-        if env_python.exists():
-            return [str(env_python), *command[1:]]
+    if command:
+        env_bin = Path(runtime["conda_env_root"]) / "bin" / command[0]
+        if env_bin.exists():
+            return [str(env_bin), *command[1:]]
     return [runtime["conda_bin"], "run", "--no-capture-output", "-n", env_name, *command]
 
 
