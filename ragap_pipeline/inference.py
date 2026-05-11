@@ -41,7 +41,7 @@ DEFAULT_NODE_MAPS = PROJECT_ROOT / "artifacts" / DEFAULT_DATASET_ID / "graph" / 
 DEFAULT_HOST_CATALOG = PROJECT_ROOT / "artifacts" / DEFAULT_DATASET_ID / "catalogs" / "host_catalog.parquet"
 DEFAULT_TAXONOMY_TREE = PROJECT_ROOT / "data" / "taxonomy" / "taxonomy_with_alias.parquet"
 DEFAULT_TAXID2SPECIES = PROJECT_ROOT / "data" / "metadata" / "taxid_species.tsv"
-DEFAULT_OUTPUT_MODE = "species"
+DEFAULT_OUTPUT_MODE = None  # None means output both species and genus
 SUPPORTED_FASTA_SUFFIXES = {".fasta", ".fa", ".fna"}
 PHAGE_INTERACTS = ("phage", "interacts", "phage")
 PHAGE_ENCODES = ("phage", "encodes", "protein")
@@ -130,8 +130,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         choices=("species", "genus"),
-        default=DEFAULT_OUTPUT_MODE,
-        help="Output label mode",
+        default=None,
+        help="Output label level. Default: output both species and genus.",
     )
     parser.add_argument("--output", required=True, help="Output TSV path")
     parser.add_argument("--manifest", default=None, help="Optional train manifest path")
@@ -832,27 +832,16 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
         json.dump(payload, handle, ensure_ascii=True, indent=2, sort_keys=True)
 
 
-def _save_result_tsv(path: Path, row: dict[str, Any]) -> None:
+def _save_result_tsv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        return
+    fieldnames = list(rows[0].keys())
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=[
-                "input_file",
-                "phage_id",
-                "mode",
-                "top_host_id",
-                "top_host_taxid",
-                "top_species",
-                "top_genus",
-                "score",
-                "checkpoint",
-                "work_dir",
-            ],
-            delimiter="\t",
-        )
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
         writer.writeheader()
-        writer.writerow(row)
+        for row in rows:
+            writer.writerow(row)
 
 
 def _cleanup_work_dir(work_dir: Path, keep_paths: list[Path]) -> None:
@@ -982,27 +971,33 @@ def run_inference(args: argparse.Namespace) -> dict[str, Any]:
         },
     )
 
-    result = {
-        "input_file": str(original_input_path),
+    # Build result based on mode
+    result: dict[str, Any] = {
         "phage_id": original_id,
-        "mode": args.mode,
         "top_host_id": host_id,
         "top_host_taxid": host_taxid,
-        "top_species": top_species,
-        "top_genus": top_genus,
-        "score": round(score, 6),
-        "checkpoint": str(assets.checkpoint),
-        "work_dir": str(work_dir),
     }
+    if args.mode is None:
+        result["top_species"] = top_species
+        result["top_genus"] = top_genus
+    elif args.mode == "species":
+        result["top_species"] = top_species
+    else:
+        result["top_genus"] = top_genus
+    result["score"] = round(score, 6)
+
     output_path = Path(args.output).expanduser().resolve()
-    _save_result_tsv(output_path, result)
+    _save_result_tsv(output_path, [result])
     if args.cleanup:
         _cleanup_work_dir(work_dir, keep_paths=[output_path] if output_path.exists() else [])
-        result["work_dir"] = str(work_dir)
-    selected_label = top_species if args.mode == "species" else top_genus
-    print(
-        f"{original_id}\tmode={args.mode}\tlabel={selected_label}\thost={host_id}\tscore={score:.6f}"
-    )
+
+    # Print summary
+    if args.mode is None:
+        print(f"{original_id}\tspecies={top_species}\tgenus={top_genus}\thost={host_id}\tscore={score:.6f}")
+    else:
+        label = top_species if args.mode == "species" else top_genus
+        print(f"{original_id}\t{args.mode}={label}\thost={host_id}\tscore={score:.6f}")
+
     return result
 
 
@@ -1052,30 +1047,23 @@ def run_batch_inference(args: argparse.Namespace) -> list[dict[str, Any]]:
             results.append(result)
         except Exception as exc:
             LOGGER.error("Failed to process %s: %s", fasta_file.name, exc)
-            results.append({
-                "input_file": str(fasta_file),
+            error_row: dict[str, Any] = {
                 "phage_id": fasta_file.stem,
-                "mode": args.mode,
                 "top_host_id": "ERROR",
                 "top_host_taxid": -1,
-                "top_species": "ERROR",
-                "top_genus": "ERROR",
-                "score": 0.0,
-                "checkpoint": "",
-                "work_dir": "",
-            })
+            }
+            if args.mode is None:
+                error_row["top_species"] = "ERROR"
+                error_row["top_genus"] = "ERROR"
+            elif args.mode == "species":
+                error_row["top_species"] = "ERROR"
+            else:
+                error_row["top_genus"] = "ERROR"
+            error_row["score"] = 0.0
+            results.append(error_row)
 
     # Write combined results
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = [
-        "input_file", "phage_id", "mode", "top_host_id", "top_host_taxid",
-        "top_species", "top_genus", "score", "checkpoint", "work_dir",
-    ]
-    with output_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
-        writer.writeheader()
-        for row in results:
-            writer.writerow({k: row.get(k, "") for k in fieldnames})
+    _save_result_tsv(output_path, results)
 
     LOGGER.info("Batch inference complete: %d results written to %s", len(results), output_path)
     return results

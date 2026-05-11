@@ -46,31 +46,34 @@ bash setup.sh --bundle-only  # download inference bundle only
 
 ### Run inference
 
-```bash
-python infer_phage_host.py \
-  --input query.fa \
-  --mode species \
-  --output result.tsv
-```
-
-For genus-level output:
+Default (outputs both species and genus):
 
 ```bash
-python infer_phage_host.py \
-  --input query.fa \
-  --mode genus \
-  --output result.tsv
+python infer_phage_host.py --input query.fa --output result.tsv
 ```
 
-For batch processing (multi-record FASTA, each record processed separately):
+Species-only or genus-only:
 
 ```bash
-python infer_phage_host.py \
-  --input multi_phage.fa \
-  --mode species \
-  --output batch_results.tsv \
-  --batch
+python infer_phage_host.py --input query.fa --mode species --output result.tsv
+python infer_phage_host.py --input query.fa --mode genus --output result.tsv
 ```
+
+Batch processing (multi-record FASTA):
+
+```bash
+python infer_phage_host.py --input multi_phage.fa --output batch_results.tsv --batch
+```
+
+### Output format
+
+Default output (both species and genus):
+
+| phage_id | top_host_id | top_host_taxid | top_species | top_genus | score |
+|----------|-------------|----------------|-------------|-----------|-------|
+| KX266586 | GCF_000005845 | 562 | Escherichia coli | Escherichia | 0.999909 |
+
+With `--mode species`: columns are `phage_id, top_host_id, top_host_taxid, top_species, score`
 
 ## Repository Layout
 
